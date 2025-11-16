@@ -56,6 +56,13 @@ class Job(BaseModel):
     match_score: float
 
 
+class JobBatchIngestRequest(BaseModel):
+    """
+    Represents a batch of jobs to be ingested in a single request.
+    """
+    jobs: List[JobCreate]
+
+
 current_profile: Optional[UserProfile] = None
 job_store: List[Job] = []
 
@@ -105,7 +112,6 @@ def compute_match_score(job: JobCreate, profile: UserProfile) -> float:
     description_lower = (job.description or "").lower()
     location_lower = (job.location or "").lower()
 
-    # Role matching
     if profile.target_roles:
         for role in profile.target_roles:
             role_lower = role.lower()
@@ -113,7 +119,6 @@ def compute_match_score(job: JobCreate, profile: UserProfile) -> float:
                 score += 0.4
                 break
 
-    # Hard skills matching
     if profile.hard_skills:
         hard_matches = 0
         for skill in profile.hard_skills:
@@ -124,7 +129,6 @@ def compute_match_score(job: JobCreate, profile: UserProfile) -> float:
         skill_ratio = hard_matches / len(profile.hard_skills)
         score += min(skill_ratio * 0.4, 0.4)
 
-    # Nice-to-have skills matching
     if profile.nice_to_have_skills:
         nice_matches = 0
         for skill in profile.nice_to_have_skills:
@@ -135,7 +139,6 @@ def compute_match_score(job: JobCreate, profile: UserProfile) -> float:
         nice_ratio = nice_matches / len(profile.nice_to_have_skills)
         score += min(nice_ratio * 0.15, 0.15)
 
-    # Location matching
     if profile.locations_preferred and location_lower:
         for location in profile.locations_preferred:
             if location.lower() in location_lower:
@@ -174,6 +177,40 @@ def ingest_test_job(job_data: JobCreate):
     return job
 
 
+@app.post("/jobs/ingest/batch", response_model=List[Job])
+def ingest_jobs_batch(batch: JobBatchIngestRequest):
+    """
+    Ingests multiple jobs, computes their scores, and stores them in memory.
+    """
+    global current_profile, job_store
+
+    if current_profile is None:
+        current_profile = UserProfile()
+
+    created_jobs: List[Job] = []
+
+    for job_data in batch.jobs:
+        match_score = compute_match_score(job_data, current_profile)
+
+        job = Job(
+            id=str(uuid4()),
+            title=job_data.title,
+            company=job_data.company,
+            location=job_data.location,
+            description=job_data.description,
+            url=job_data.url,
+            source=job_data.source,
+            source_id=job_data.source_id,
+            published_at=job_data.published_at,
+            match_score=match_score,
+        )
+
+        job_store.append(job)
+        created_jobs.append(job)
+
+    return created_jobs
+
+
 @app.get("/jobs", response_model=List[Job])
 def list_jobs(min_score: Optional[float] = Query(default=None, ge=0.0, le=1.0)):
     """
@@ -183,3 +220,24 @@ def list_jobs(min_score: Optional[float] = Query(default=None, ge=0.0, le=1.0)):
         return job_store
 
     return [job for job in job_store if job.match_score >= min_score]
+
+
+@app.get("/jobs/recommended", response_model=List[Job])
+def list_recommended_jobs(
+    min_score: float = Query(default=0.5, ge=0.0, le=1.0),
+    limit: int = Query(default=10, ge=1),
+    since: Optional[datetime] = Query(default=None),
+):
+    """
+    Returns the top matching jobs sorted by score and optionally filtered by date.
+    """
+    filtered = [job for job in job_store if job.match_score >= min_score]
+
+    if since is not None:
+        filtered = [
+            job for job in filtered
+            if job.published_at is not None and job.published_at >= since
+        ]
+
+    filtered.sort(key=lambda j: j.match_score, reverse=True)
+    return filtered[:limit]

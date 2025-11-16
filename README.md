@@ -7,9 +7,12 @@ The project is fully cost-free, modular, and ready to be extended with manual Li
 
 - FastAPI backend with health endpoint (`/health`)
 - In-memory user profile model with `GET /profile` and `PUT /profile`
-- In-memory job model with basic scoring logic and test ingestion endpoint:
-  - `POST /jobs/test-ingest`
-  - `GET /jobs?min_score=...`
+- In-memory job model with basic scoring logic and ingestion endpoints:
+  - `POST /jobs/test-ingest` (single job)
+  - `POST /jobs/ingest/batch` (multiple jobs)
+  - `GET /jobs?min_score=...` (filter by score)
+  - `GET /jobs/recommended?min_score=...&limit=...&since=...` (top matching jobs for digests)
+
 
 
 
