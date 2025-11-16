@@ -6,18 +6,19 @@ The project is fully cost-free, modular, and ready to be extended with manual Li
 ## Current Features
 
 - FastAPI backend with health endpoint (`/health`)
-- Fully documented and structured backend in English
-- Ready-to-extend architecture for job ingestion, scoring, and notifications
+- In-memory user profile model with `GET /profile` and `PUT /profile`
+
 
 ## Roadmap (MVP)
 
 1. Backend skeleton (FastAPI) ✔
-2. User profile model + API
+2. User profile model + API ✔
 3. Job model + scoring engine
 4. Automatic job ingestion (Remotive, RemoteOK, Jooble, Adzuna)
 5. Daily digest generator + Telegram delivery via n8n
 6. Job application status tracking
 7. Manual LinkedIn ingestion (Telegram → n8n → backend)
+
 
 ## Tech Stack
 
