@@ -1,0 +1,43 @@
+# ------------------------------------------------------------
+# Python environment & cache
+# ------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Python local settings
+*.env
+*.local
+
+# SQLite database (will be created later)
+*.sqlite3
+*.db
+
+# n8n export files (large auto exports)
+.n8n/
