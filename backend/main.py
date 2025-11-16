@@ -11,6 +11,16 @@ from uuid import uuid4
 from fastapi import FastAPI, Query
 from pydantic import BaseModel, Field
 
+from database import engine
+from models import Base
+
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from database import get_db
+from models import UserProfileDB, list_to_text, text_to_list
+
+
 app = FastAPI(title="Job Hunt Agent API")
 
 
@@ -63,7 +73,6 @@ class JobBatchIngestRequest(BaseModel):
     jobs: List[JobCreate]
 
 
-current_profile: Optional[UserProfile] = None
 job_store: List[Job] = []
 
 
@@ -76,27 +85,43 @@ def health_check():
 
 
 @app.get("/profile", response_model=UserProfile)
-def get_profile():
+def get_profile(db: Session = Depends(get_db)):
     """
-    Returns the currently stored user profile or an empty default profile.
+    Returns the stored user profile, or creates an empty profile if none exists.
     """
-    global current_profile
+    profile = db.query(UserProfileDB).first()
 
-    if current_profile is None:
-        current_profile = UserProfile()
+    if profile is None:
+        profile = UserProfileDB()
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
 
-    return current_profile
+    return db_to_profile(profile)
+
 
 
 @app.put("/profile", response_model=UserProfile)
-def update_profile(profile: UserProfile):
+def update_profile(profile: UserProfile, db: Session = Depends(get_db)):
     """
-    Stores or updates the user profile used for job matching.
+    Updates the user profile stored in the database.
     """
-    global current_profile
+    db_profile = db.query(UserProfileDB).first()
 
-    current_profile = profile
-    return current_profile
+    if db_profile is None:
+        db_profile = UserProfileDB()
+        db.add(db_profile)
+
+    data = profile_to_db_data(profile)
+
+    for key, value in data.items():
+        setattr(db_profile, key, value)
+
+    db.commit()
+    db.refresh(db_profile)
+
+    return db_to_profile(db_profile)
+
 
 
 def compute_match_score(job: JobCreate, profile: UserProfile) -> float:
@@ -241,3 +266,29 @@ def list_recommended_jobs(
 
     filtered.sort(key=lambda j: j.match_score, reverse=True)
     return filtered[:limit]
+
+
+def db_to_profile(db_obj: UserProfileDB) -> UserProfile:
+    return UserProfile(
+        full_name=db_obj.full_name,
+        target_roles=text_to_list(db_obj.target_roles),
+        hard_skills=text_to_list(db_obj.hard_skills),
+        nice_to_have_skills=text_to_list(db_obj.nice_to_have_skills),
+        locations_preferred=text_to_list(db_obj.locations_preferred),
+        min_salary=db_obj.min_salary,
+    )
+
+
+def profile_to_db_data(profile: UserProfile) -> dict:
+    return {
+        "full_name": profile.full_name,
+        "target_roles": list_to_text(profile.target_roles),
+        "hard_skills": list_to_text(profile.hard_skills),
+        "nice_to_have_skills": list_to_text(profile.nice_to_have_skills),
+        "locations_preferred": list_to_text(profile.locations_preferred),
+        "min_salary": profile.min_salary,
+    }
+
+
+
+Base.metadata.create_all(bind=engine)
