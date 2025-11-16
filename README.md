@@ -1,39 +1,80 @@
 # Job Hunt Agent
 
-Job Hunt Agent is an automated system designed to collect job postings from multiple free data sources, evaluate them based on a customizable user profile, and deliver daily recommendations via Telegram.  
-The project is fully cost-free, modular, and ready to be extended with manual LinkedIn ingestion via Telegram + n8n.
+Job Hunt Agent is a lightweight backend that stores job postings from free external APIs, scores them using a customizable user profile, and exposes endpoints for external automations (n8n) to ingest jobs and generate daily Telegram digests.
 
-## Current Features
+---
 
-- FastAPI backend with health endpoint (`/health`)
-- In-memory user profile model with `GET /profile` and `PUT /profile`
-- In-memory job model with basic scoring logic and ingestion endpoints:
-  - `POST /jobs/test-ingest` (single job)
-  - `POST /jobs/ingest/batch` (multiple jobs)
-  - `GET /jobs?min_score=...` (filter by score)
-  - `GET /jobs/recommended?min_score=...&limit=...&since=...` (top matching jobs for digests)
+## System Flow Overview
 
+1. **User Profile Setup**  
+   The user defines roles, skills, and locations. These preferences guide the job scoring.
 
+2. **Job Ingestion (via n8n)**  
+   n8n fetches jobs from free APIs, maps them, and sends them to the backend in batch.
 
+3. **Scoring & Storage**  
+   Each job is scored against the user profile and saved in SQLite (duplicates skipped).
 
-## Roadmap (MVP)
+4. **Job Retrieval**  
+   External automations request recommended jobs to build daily/weekly digests.
 
-1. Backend skeleton (FastAPI) ✔
-2. User profile model + API ✔
-3. Job model + scoring engine
-4. Automatic job ingestion (Remotive, RemoteOK, Jooble, Adzuna)
-5. Daily digest generator + Telegram delivery via n8n
-6. Job application status tracking
-7. Manual LinkedIn ingestion (Telegram → n8n → backend)
+5. **Notifications**  
+   n8n sends top jobs to the user via Telegram.
 
+---
+
+## Feature Checklist
+
+### ⭐ Core Backend
+
+| Feature | Status |
+|--------|--------|
+| FastAPI backend skeleton | ✔️ |
+| SQLite database + SQLAlchemy ORM | ✔️ |
+| User profile CRUD (`GET /profile`, `PUT /profile`) | ✔️ |
+| Job ingestion endpoints (`test-ingest`, `batch ingest`) | ✔️ |
+| Job scoring engine (v1 basic) | ✔️ |
+| Recommended jobs (`/jobs/recommended`) | ✔️ |
+
+---
+
+### 🔄 Integrations & Automations
+
+| Feature | Status |
+|--------|--------|
+| n8n workflow for Remotive ingestion | ✔️ |
+| Mapping & batch send to backend | ✔️ |
+| Daily job retrieval for digest | ⏳ |
+| Telegram delivery via bot | ⏳ |
+| Ingestion from additional sources (RemoteOK, Adzuna, Jooble) | ⏳ |
+| Manual LinkedIn ingestion (Telegram → n8n → backend) | ⏳ |
+
+---
+
+### 📈 Scoring & Intelligence
+
+| Feature | Status |
+|--------|--------|
+| Basic scoring (roles, skills, location) | ✔️ |
+| Weight tuning / configurable scoring | ⏳ |
+| AI-based job ranking | ⏳ |
+
+---
+
+### 🗂 Job Management
+
+| Feature | Status |
+|--------|--------|
+| Job application status (applied, interview, rejected...) | ⏳ |
+| Notes & reminders | ⏳ |
+| Filtering by status | ⏳ |
+
+---
 
 ## Tech Stack
 
-- **Backend**: Python + FastAPI
-- **Orchestration**: n8n (self-hosted)
-- **Database**: SQLite (MVP), later optional migration to Postgres
-- **Notifications**: Telegram bot
-- **Hosting**: Local or free-tier platforms (Render, Railway, Fly.io)
-
-## Project Structure (initial)
+- **Backend:** Python + FastAPI  
+- **Database:** SQLite + SQLAlchemy  
+- **Automations:** n8n (self-hosted)  
+- **Notifications:** Telegram bot  
 
