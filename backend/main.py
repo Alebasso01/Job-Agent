@@ -1,79 +1,56 @@
 """
 Backend entrypoint for the Job Hunt Agent.
-This file initializes the FastAPI application and exposes health-check,
-user profile, and basic in-memory job ingestion and scoring routes.
+This file initializes the FastAPI application and exposes:
+- health-check endpoint
+- user profile CRUD endpoints
+- job ingestion and recommendation endpoints backed by SQLite.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional, List
-from uuid import uuid4
+from typing import List, Optional
 
-from fastapi import FastAPI, Query
-from pydantic import BaseModel, Field
-
-from database import engine
-from models import Base
-
-from fastapi import Depends
+from fastapi import Depends, FastAPI, Query
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import UserProfileDB, list_to_text, text_to_list
+from database import Base, engine, get_db
+from models import (
+    Job,
+    JobCreate,
+    JobRead,
+    JobsBatchCreate,
+    UserProfile as UserProfileORM,
+    UserProfileRead,
+    UserProfileUpdate,
+)
+from app.services.scoring import compute_match_score
 
 
 app = FastAPI(title="Job Hunt Agent API")
 
 
-class UserProfile(BaseModel):
-    """
-    Represents the core preferences of the job seeker.
-    """
-    full_name: Optional[str] = None
-    target_roles: List[str] = Field(default_factory=list)
-    hard_skills: List[str] = Field(default_factory=list)
-    nice_to_have_skills: List[str] = Field(default_factory=list)
-    locations_preferred: List[str] = Field(default_factory=list)
-    min_salary: Optional[int] = None
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-class JobCreate(BaseModel):
+def get_or_create_profile(db: Session) -> UserProfileORM:
     """
-    Represents the minimal input required to create a job entry.
+    Load the single user profile from the database, creating a default one if missing.
     """
-    title: str
-    company: Optional[str] = None
-    location: Optional[str] = None
-    description: Optional[str] = None
-    url: Optional[str] = None
-    source: str
-    source_id: Optional[str] = None
-    published_at: Optional[datetime] = None
+    profile = db.query(UserProfileORM).first()
+    if profile is None:
+        profile = UserProfileORM()
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    return profile
 
 
-class Job(BaseModel):
-    """
-    Represents a normalized job posting enriched with a match score.
-    """
-    id: str
-    title: str
-    company: Optional[str]
-    location: Optional[str]
-    description: Optional[str]
-    url: Optional[str]
-    source: str
-    source_id: Optional[str]
-    published_at: Optional[datetime]
-    match_score: float
-
-
-class JobBatchIngestRequest(BaseModel):
-    """
-    Represents a batch of jobs to be ingested in a single request.
-    """
-    jobs: List[JobCreate]
-
-
-job_store: List[Job] = []
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
 
 
 @app.get("/health")
@@ -84,109 +61,67 @@ def health_check():
     return {"status": "ok", "message": "Job Hunt Agent backend is running"}
 
 
-@app.get("/profile", response_model=UserProfile)
+# ---------------------------------------------------------------------------
+# User profile endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/profile", response_model=UserProfileRead)
 def get_profile(db: Session = Depends(get_db)):
     """
-    Returns the stored user profile, or creates an empty profile if none exists.
+    Return the stored user profile, creating an empty one if none exists.
     """
-    profile = db.query(UserProfileDB).first()
-
-    if profile is None:
-        profile = UserProfileDB()
-        db.add(profile)
-        db.commit()
-        db.refresh(profile)
-
-    return db_to_profile(profile)
+    profile = get_or_create_profile(db)
+    return profile
 
 
 
-@app.put("/profile", response_model=UserProfile)
-def update_profile(profile: UserProfile, db: Session = Depends(get_db)):
+@app.put("/profile", response_model=UserProfileRead)
+def update_profile(payload: UserProfileUpdate, db: Session = Depends(get_db)):
     """
-    Updates the user profile stored in the database.
+    Update the user profile stored in the database.
     """
-    db_profile = db.query(UserProfileDB).first()
-
-    if db_profile is None:
-        db_profile = UserProfileDB()
-        db.add(db_profile)
-
-    data = profile_to_db_data(profile)
+    profile = get_or_create_profile(db)
+    data = payload.dict()
 
     for key, value in data.items():
-        setattr(db_profile, key, value)
+        if key == "remote_only":
+            setattr(profile, key, int(bool(value)))
+        else:
+            setattr(profile, key, value)
 
+    profile.updated_at = datetime.utcnow()
     db.commit()
-    db.refresh(db_profile)
+    db.refresh(profile)
 
-    return db_to_profile(db_profile)
+    return profile
 
 
+# ---------------------------------------------------------------------------
+# Job ingestion endpoints
+# ---------------------------------------------------------------------------
 
-def compute_match_score(job: JobCreate, profile: UserProfile) -> float:
+
+@app.post("/jobs/test-ingest", response_model=JobRead)
+def ingest_test_job(job_data: JobCreate, db: Session = Depends(get_db)):
     """
-    Computes a basic match score between a job and the user profile.
+    Ingest a single test job, compute its score, and store it in the database.
     """
-    if not profile:
-        return 0.0
+    profile = get_or_create_profile(db)
 
-    score = 0.0
+    profile_data = {
+        "full_name": profile.full_name,
+        "target_roles": profile.target_roles or [],
+        "skills": profile.skills or [],
+        "preferred_locations": profile.preferred_locations or [],
+        "bad_keywords": profile.bad_keywords or [],
+        "remote_only": bool(profile.remote_only),
+        "seniority_preference": profile.seniority_preference,
+    }
 
-    title_lower = job.title.lower()
-    description_lower = (job.description or "").lower()
-    location_lower = (job.location or "").lower()
+    match_score = compute_match_score(job_data.dict(), profile_data)
 
-    if profile.target_roles:
-        for role in profile.target_roles:
-            role_lower = role.lower()
-            if role_lower in title_lower:
-                score += 0.4
-                break
-
-    if profile.hard_skills:
-        hard_matches = 0
-        for skill in profile.hard_skills:
-            skill_lower = skill.lower()
-            if skill_lower in title_lower or skill_lower in description_lower:
-                hard_matches += 1
-
-        skill_ratio = hard_matches / len(profile.hard_skills)
-        score += min(skill_ratio * 0.4, 0.4)
-
-    if profile.nice_to_have_skills:
-        nice_matches = 0
-        for skill in profile.nice_to_have_skills:
-            skill_lower = skill.lower()
-            if skill_lower in title_lower or skill_lower in description_lower:
-                nice_matches += 1
-
-        nice_ratio = nice_matches / len(profile.nice_to_have_skills)
-        score += min(nice_ratio * 0.15, 0.15)
-
-    if profile.locations_preferred and location_lower:
-        for location in profile.locations_preferred:
-            if location.lower() in location_lower:
-                score += 0.05
-                break
-
-    return max(0.0, min(score, 1.0))
-
-
-@app.post("/jobs/test-ingest", response_model=Job)
-def ingest_test_job(job_data: JobCreate):
-    """
-    Ingests a single test job, computes its score, and stores it in memory.
-    """
-    global current_profile, job_store
-
-    if current_profile is None:
-        current_profile = UserProfile()
-
-    match_score = compute_match_score(job_data, current_profile)
-
-    job = Job(
-        id=str(uuid4()),
+    new_job = Job(
         title=job_data.title,
         company=job_data.company,
         location=job_data.location,
@@ -198,27 +133,53 @@ def ingest_test_job(job_data: JobCreate):
         match_score=match_score,
     )
 
-    job_store.append(job)
-    return job
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+
+    return JobRead.from_orm(new_job)
 
 
-@app.post("/jobs/ingest/batch", response_model=List[Job])
-def ingest_jobs_batch(batch: JobBatchIngestRequest):
+@app.post("/jobs/ingest/batch", response_model=List[JobRead])
+def ingest_jobs_batch(payload: JobsBatchCreate, db: Session = Depends(get_db)):
     """
-    Ingests multiple jobs, computes their scores, and stores them in memory.
+    Ingest multiple jobs, compute their scores, and save them to the database,
+    skipping duplicates based on (source, source_id).
     """
-    global current_profile, job_store
+    profile = get_or_create_profile(db)
 
-    if current_profile is None:
-        current_profile = UserProfile()
+    profile_data = {
+        "full_name": profile.full_name,
+        "target_roles": profile.target_roles or [],
+        "skills": profile.skills or [],
+        "preferred_locations": profile.preferred_locations or [],
+        "bad_keywords": profile.bad_keywords or [],
+        "remote_only": bool(profile.remote_only),
+        "seniority_preference": profile.seniority_preference,
+    }
 
-    created_jobs: List[Job] = []
+    stored_jobs: List[Job] = []
 
-    for job_data in batch.jobs:
-        match_score = compute_match_score(job_data, current_profile)
+    for job_data in payload.jobs:
+        existing: Optional[Job] = None
 
-        job = Job(
-            id=str(uuid4()),
+        if job_data.source_id:
+            existing = (
+                db.query(Job)
+                .filter(
+                    Job.source == job_data.source,
+                    Job.source_id == job_data.source_id,
+                )
+                .first()
+            )
+
+        if existing is not None:
+            stored_jobs.append(existing)
+            continue
+
+        match_score = compute_match_score(job_data.dict(), profile_data)
+
+        new_job = Job(
             title=job_data.title,
             company=job_data.company,
             location=job_data.location,
@@ -230,65 +191,62 @@ def ingest_jobs_batch(batch: JobBatchIngestRequest):
             match_score=match_score,
         )
 
-        job_store.append(job)
-        created_jobs.append(job)
+        db.add(new_job)
+        stored_jobs.append(new_job)
 
-    return created_jobs
+    db.commit()
+    for job in stored_jobs:
+        db.refresh(job)
+
+    return [JobRead.from_orm(j) for j in stored_jobs]
 
 
-@app.get("/jobs", response_model=List[Job])
-def list_jobs(min_score: Optional[float] = Query(default=None, ge=0.0, le=1.0)):
+# ---------------------------------------------------------------------------
+# Job listing endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/jobs", response_model=List[JobRead])
+def list_jobs(
+    min_score: Optional[float] = Query(default=None, ge=0.0, le=1.0),
+    db: Session = Depends(get_db),
+):
     """
-    Returns all stored jobs, optionally filtered by a minimum match score.
+    Return all stored jobs, optionally filtered by a minimum match score.
     """
-    if min_score is None:
-        return job_store
+    query = db.query(Job)
 
-    return [job for job in job_store if job.match_score >= min_score]
+    if min_score is not None:
+        query = query.filter(Job.match_score >= min_score)
+
+    jobs = query.all()
+    return [JobRead.from_orm(j) for j in jobs]
 
 
-@app.get("/jobs/recommended", response_model=List[Job])
+@app.get("/jobs/recommended", response_model=List[JobRead])
 def list_recommended_jobs(
     min_score: float = Query(default=0.5, ge=0.0, le=1.0),
     limit: int = Query(default=10, ge=1),
     since: Optional[datetime] = Query(default=None),
+    db: Session = Depends(get_db),
 ):
     """
-    Returns the top matching jobs sorted by score and optionally filtered by date.
+    Return top jobs sorted by score, with optional date filter.
     """
-    filtered = [job for job in job_store if job.match_score >= min_score]
+    query = db.query(Job).filter(Job.match_score >= min_score)
 
     if since is not None:
-        filtered = [
-            job for job in filtered
-            if job.published_at is not None and job.published_at >= since
-        ]
+        query = query.filter(Job.published_at >= since)
 
-    filtered.sort(key=lambda j: j.match_score, reverse=True)
-    return filtered[:limit]
+    query = query.order_by(Job.match_score.desc())
 
-
-def db_to_profile(db_obj: UserProfileDB) -> UserProfile:
-    return UserProfile(
-        full_name=db_obj.full_name,
-        target_roles=text_to_list(db_obj.target_roles),
-        hard_skills=text_to_list(db_obj.hard_skills),
-        nice_to_have_skills=text_to_list(db_obj.nice_to_have_skills),
-        locations_preferred=text_to_list(db_obj.locations_preferred),
-        min_salary=db_obj.min_salary,
-    )
+    jobs = query.limit(limit).all()
+    return [JobRead.from_orm(j) for j in jobs]
 
 
-def profile_to_db_data(profile: UserProfile) -> dict:
-    return {
-        "full_name": profile.full_name,
-        "target_roles": list_to_text(profile.target_roles),
-        "hard_skills": list_to_text(profile.hard_skills),
-        "nice_to_have_skills": list_to_text(profile.nice_to_have_skills),
-        "locations_preferred": list_to_text(profile.locations_preferred),
-        "min_salary": profile.min_salary,
-    }
-
+# ---------------------------------------------------------------------------
+# Database initialization
+# ---------------------------------------------------------------------------
 
 
 Base.metadata.create_all(bind=engine)
