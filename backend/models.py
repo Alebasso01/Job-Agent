@@ -21,7 +21,8 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy import JSON
+
 from database import Base
 
 

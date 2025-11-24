@@ -1,24 +1,31 @@
 """
-Database configuration using SQLAlchemy + SQLite.
-This module initializes the SQLite engine and session factory.
+Database configuration using SQLAlchemy.
+Supports both SQLite (default, for local dev) and PostgreSQL via DATABASE_URL.
 """
+
+import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# SQLite database file
-DATABASE_URL = "sqlite:///./job_hunt.db"
+# If DATABASE_URL is not set, fall back to local SQLite
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./job_hunt.db")
 
-# Create the engine that communicates with the SQLite database
+# Extra args only for SQLite
+engine_kwargs = {}
+if DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+# Create engine
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False}  # Needed for SQLite + FastAPI
+    **engine_kwargs
 )
 
-# Base class for our ORM models
+# Base class for ORM models
 Base = declarative_base()
 
-# Factory for database sessions
+# Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
