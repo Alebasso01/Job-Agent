@@ -41,3 +41,6 @@ Thumbs.db
 
 # n8n export files (large auto exports)
 .n8n/
+
+# passwords and keys
+.env

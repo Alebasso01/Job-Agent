@@ -1,37 +1,51 @@
 """
 Database configuration using SQLAlchemy.
-Supports both SQLite (default, for local dev) and PostgreSQL via DATABASE_URL.
+
+Supporta sia:
+- SQLite locale (default, per sviluppo)
+- PostgreSQL via DATABASE_URL (es. Neon, Supabase, Render, ecc.)
+
+Le credenziali vengono lette da variabili d'ambiente,
+caricate automaticamente da un file .env in locale.
 """
 
 import os
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# If DATABASE_URL is not set, fall back to local SQLite
+# Carica le variabili dal file .env (solo in locale)
+load_dotenv()
+
+# Se DATABASE_URL non è settata, usa SQLite locale
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./job_hunt.db")
 
-# Extra args only for SQLite
+# Normalizza l'URL in caso di formato postgres:// → postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Argomenti extra solo per SQLite
 engine_kwargs = {}
 if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 
-# Create engine
+# Crea l'engine
 engine = create_engine(
     DATABASE_URL,
-    **engine_kwargs
+    **engine_kwargs,
 )
 
-# Base class for ORM models
+# Base per i modelli ORM
 Base = declarative_base()
 
-# Session factory
+# Factory per le sessioni DB
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():
     """
-    Dependency used by FastAPI to obtain a clean DB session for each request.
+    Dependency per FastAPI: crea e chiude una sessione DB per ogni richiesta.
     """
     db = SessionLocal()
     try:
